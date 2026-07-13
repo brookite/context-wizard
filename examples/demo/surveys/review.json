@@ -1,0 +1,21 @@
+[
+  {
+    "question": "Как вас зовут (для подписи ревью)?",
+    "varName": "reviewer",
+    "cached": true,
+    "answer": {
+      "type": "input",
+      "datatype": "string",
+      "hint": "Имя Фамилия",
+      "maxInputLength": 80
+    }
+  },
+  {
+    "question": "Уровень критичности замечаний?",
+    "varName": "severity",
+    "answer": {
+      "type": "option",
+      "options": ["blocker", "major", "minor", "nit"]
+    }
+  }
+]

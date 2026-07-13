@@ -1,0 +1,7 @@
+{
+  "project": {
+    "name": "ACME Platform",
+    "repo": "github.com/acme/platform"
+  },
+  "reviewer_role": "старший инженер"
+}

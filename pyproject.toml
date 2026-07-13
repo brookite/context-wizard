@@ -1,0 +1,52 @@
+[project]
+name = "context-wizard"
+version = "0.1.0"
+description = "Собирает богатый контекст-промпт из шаблонов, файлов, опросников и внешних инструментов"
+readme = "README.md"
+authors = [
+    { name = "Dmitry Shashkov (Brookit)", email = "brookit18@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "textual>=0.86",
+    "jsonschema>=4.23",
+    "pydantic>=2.9",
+    "httpx>=0.28.1",
+    "beautifulsoup4>=4.15.0",
+]
+
+[project.scripts]
+context-wizard = "context_wizard.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "textual-dev>=1.6",
+    "ruff>=0.7",
+    "pyright>=1.1.380",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "TID"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src"]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
