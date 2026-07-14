@@ -1,0 +1,2 @@
+external_tool = "moodle"
+plugins_dir = ["plugins"]

@@ -1,0 +1,9 @@
+[
+  {
+    "id": "main",
+    "name": "Основной Moodle",
+    "url": "https://moodle.example.edu",
+    "username_env": "MOODLE_MAIN_USERNAME",
+    "password_env": "MOODLE_MAIN_PASSWORD"
+  }
+]
