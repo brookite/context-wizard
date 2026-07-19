@@ -6,6 +6,7 @@ import pytest
 from context_wizard.app import Collector, CollectorOptions
 from context_wizard.config import load_setup
 from context_wizard.output import PROMPT_FILENAME, OutputOptions, resolve_output_options
+from context_wizard.plugins import AnswerDeliveryError
 from context_wizard.surveys import SurveyElement
 from context_wizard.ui import WizardAborted
 
@@ -204,10 +205,145 @@ def test_answer_target_override_selects_plugin(tmp_path):
 
     collector = Collector(tmp_path, config, HeadlessUI())
     options = CollectorOptions(
-        output=OutputOptions(), prompt_id="p", answer_target_id="recorder"
+        output=OutputOptions(), prompt_id="p", answer_target_ids=["recorder"]
     )
     collector.run(options)
     assert (tmp_path / "delivered.txt").read_text(encoding="utf-8") == "hello target"
+
+
+_CONCURRENT_TARGETS = '''
+from threading import Barrier
+
+from context_wizard.plugins import AnswerTarget
+
+
+barrier = Barrier(2)
+
+
+class First(AnswerTarget):
+    id = "first"
+
+    def deliver(self, dto, context):
+        barrier.wait(timeout=2)
+        (context.root / "first.txt").write_text(dto.prompt, encoding="utf-8")
+
+
+class Second(AnswerTarget):
+    id = "second"
+
+    def deliver(self, dto, context):
+        barrier.wait(timeout=2)
+        (context.root / "second.txt").write_text(dto.prompt, encoding="utf-8")
+'''
+
+
+def test_answer_targets_run_concurrently(tmp_path):
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "prompts" / "p.txt").write_text("parallel", encoding="utf-8")
+    (tmp_path / "plugins" / "parallel.py").write_text(
+        _CONCURRENT_TARGETS, encoding="utf-8"
+    )
+
+    Collector(tmp_path, load_setup(tmp_path), HeadlessUI()).run(
+        CollectorOptions(
+            output=OutputOptions(),
+            prompt_id="p",
+            answer_target_ids=["first", "second"],
+        )
+    )
+
+    assert (tmp_path / "first.txt").read_text(encoding="utf-8") == "parallel"
+    assert (tmp_path / "second.txt").read_text(encoding="utf-8") == "parallel"
+
+
+_PARTIAL_FAILURE_TARGETS = '''
+from context_wizard.plugins import AnswerTarget
+
+
+class Failing(AnswerTarget):
+    id = "failing"
+
+    def deliver(self, dto, context):
+        raise RuntimeError("failed on purpose")
+
+
+class Successful(AnswerTarget):
+    id = "successful"
+
+    def deliver(self, dto, context):
+        (context.root / "successful.txt").write_text(dto.prompt, encoding="utf-8")
+'''
+
+
+def test_answer_delivery_waits_for_successful_target_and_aggregates_errors(tmp_path):
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "prompts" / "p.txt").write_text("body", encoding="utf-8")
+    (tmp_path / "plugins" / "targets.py").write_text(
+        _PARTIAL_FAILURE_TARGETS, encoding="utf-8"
+    )
+
+    with pytest.raises(AnswerDeliveryError) as captured:
+        Collector(tmp_path, load_setup(tmp_path), HeadlessUI()).run(
+            CollectorOptions(
+                output=OutputOptions(),
+                prompt_id="p",
+                answer_target_ids=["failing", "successful"],
+            )
+        )
+
+    assert (tmp_path / "successful.txt").read_text(encoding="utf-8") == "body"
+    assert [plugin_id for plugin_id, _ in captured.value.failures] == ["failing"]
+    assert "failed on purpose" in str(captured.value)
+
+
+def test_cli_target_settings_are_preserved_and_use_fs_is_conservative(tmp_path):
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "notes.txt").write_text("inline body", encoding="utf-8")
+    (tmp_path / "prompts" / "p.txt").write_text(
+        "{{ file: assets/notes.txt }}", encoding="utf-8"
+    )
+    (tmp_path / "plugins" / "targets.py").write_text(
+        '''
+from context_wizard.plugins import AnswerTarget
+
+
+class First(AnswerTarget):
+    id = "first"
+
+    def deliver(self, dto, context):
+        (context.root / "settings.txt").write_text(
+            f"{context.settings['marker']}|{dto.prompt}", encoding="utf-8"
+        )
+
+
+class Second(AnswerTarget):
+    id = "second"
+
+    def deliver(self, dto, context):
+        pass
+''',
+        encoding="utf-8",
+    )
+    (tmp_path / "setup.toml").write_text(
+        '[[answer_targets]]\nid = "first"\nuse_fs = true\n'
+        '[answer_targets.settings]\nmarker = "kept"\n\n'
+        '[[answer_targets]]\nid = "second"\nuse_fs = false\n',
+        encoding="utf-8",
+    )
+
+    Collector(tmp_path, load_setup(tmp_path), HeadlessUI()).run(
+        CollectorOptions(
+            output=OutputOptions(),
+            prompt_id="p",
+            answer_target_ids=["first", "second"],
+        )
+    )
+
+    assert (tmp_path / "settings.txt").read_text(encoding="utf-8") == "kept|notes.txt"
 
 
 def test_cached_survey_answer_persists(tmp_path):
@@ -228,3 +364,37 @@ def test_cached_survey_answer_persists(tmp_path):
     # второй запуск: кэш возвращает первый ответ, даже если ввод другой
     dto = Collector(tmp_path, config, HeadlessUI(inputs={"x": "second"})).run(options)
     assert dto.prompt == "val=first"
+
+
+_FAILING_CACHE_PLUGIN = '''
+from context_wizard.plugins import ExternalTool
+
+
+class FailingCacheTool(ExternalTool):
+    id = "failing-cache"
+
+    def run(self, context):
+        context.cache["sessions"] = {"site": {"cookie": "saved"}}
+        raise RuntimeError("later stage failed")
+'''
+
+
+def test_external_tool_cache_is_saved_when_tool_fails(tmp_path):
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "prompts" / "p.txt").write_text("{{ result }}", encoding="utf-8")
+    (tmp_path / "plugins" / "failing.py").write_text(
+        _FAILING_CACHE_PLUGIN, encoding="utf-8"
+    )
+    (tmp_path / "setup.toml").write_text(
+        'external_tool = "failing-cache"\nplugins_dir = "plugins"\n',
+        encoding="utf-8",
+    )
+
+    collector = Collector(tmp_path, load_setup(tmp_path), HeadlessUI())
+    with pytest.raises(RuntimeError, match="later stage failed"):
+        collector.run(CollectorOptions(output=OutputOptions(), prompt_id="p"))
+
+    assert collector.cache.load_tool_cache("failing-cache") == {
+        "sessions": {"site": {"cookie": "saved"}}
+    }

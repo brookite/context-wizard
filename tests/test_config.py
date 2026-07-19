@@ -46,6 +46,42 @@ def test_setup_parsing(tmp_path):
     assert config.answer_target is not None
     assert config.answer_target.id == "codex"
     assert config.answer_target.use_fs is False
+    assert config.answer_target_configs == [config.answer_target]
+
+
+def test_setup_parses_multiple_answer_targets(tmp_path):
+    (tmp_path / "setup.toml").write_text(
+        '[[answer_targets]]\nid = "codex"\nuse_fs = true\n'
+        '[answer_targets.settings]\nlaunch = false\n\n'
+        '[[answer_targets]]\nid = "folder"\nuse_fs = false\n',
+        encoding="utf-8",
+    )
+
+    config = load_setup(tmp_path)
+
+    assert [target.id for target in config.answer_target_configs] == ["codex", "folder"]
+    assert config.answer_target_configs[0].settings == {"launch": False}
+    assert config.answer_target_configs[1].use_fs is False
+
+
+@pytest.mark.parametrize(
+    "source, message",
+    [
+        (
+            '[answer_target]\nid = "codex"\n[[answer_targets]]\nid = "folder"\n',
+            "answer_target и answer_targets",
+        ),
+        (
+            '[[answer_targets]]\nid = "codex"\n[[answer_targets]]\nid = "codex"\n',
+            "не должны повторяться",
+        ),
+        ("answer_targets = []\n", "не может быть пустым"),
+    ],
+)
+def test_setup_rejects_invalid_answer_target_lists(tmp_path, source, message):
+    (tmp_path / "setup.toml").write_text(source, encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        load_setup(tmp_path)
 
 
 def test_setup_parses_ordered_plugin_directories(tmp_path):

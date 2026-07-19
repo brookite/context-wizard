@@ -98,6 +98,7 @@ def test_discovery_empty_when_no_dir(tmp_path):
 def test_builtin_codex_is_global(tmp_path):
     registry = discover_plugins(builtin_plugins_dir())
     assert "codex" in registry.answer_ids()
+    assert "folder" in registry.answer_ids()
 
 
 _OVERRIDE_SRC = '''

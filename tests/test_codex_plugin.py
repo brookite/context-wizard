@@ -57,14 +57,37 @@ def test_workspace_dir_relative_to_root(tmp_path):
     assert workspace.parent == root / "_codex_out"
 
 
-def test_missing_workspace_env_raises(tmp_path):
+def test_missing_workspace_env_defaults_to_project_output(tmp_path):
     root = _project(tmp_path)
     dto = RichPromptDTO(prompt="body", attachments=[], root=root)
     ctx = _ctx(root, launch=False)  # ни env, ни workspace_dir
     target = _load_target()
 
-    with pytest.raises(RuntimeError):
+    workspace = target.prepare_workspace(dto, ctx)
+    assert workspace.parent == root / "output"
+
+
+def test_ambiguous_output_without_workspace_env_raises(tmp_path):
+    root = _project(tmp_path)
+    dto = RichPromptDTO(prompt="body", attachments=[], root=root)
+    ctx = _ctx(root, launch=False)
+    ctx.output_dir_ambiguous = True
+    target = _load_target()
+
+    with pytest.raises(RuntimeError, match="CODEX_WORKSPACE"):
         target.prepare_workspace(dto, ctx)
+
+
+def test_output_dir_is_fallback_after_workspace_env(tmp_path):
+    root = _project(tmp_path)
+    dto = RichPromptDTO(prompt="body", attachments=[], root=root)
+    output_dir = tmp_path / "cli-output"
+    ctx = _ctx(root, launch=False)
+    ctx.output_dir = output_dir
+
+    workspace = _load_target().prepare_workspace(dto, ctx)
+
+    assert workspace.parent == output_dir
 
 
 def test_external_attachment_goes_to_external_dir(tmp_path):

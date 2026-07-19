@@ -1,13 +1,21 @@
 # Пример проекта, доставляющего готовый промпт в Codex CLI.
 # Плагин codex — встроенный (глобальный), копировать в проект не нужно.
 
-[answer_target]
+[[answer_targets]]
 id = "codex"
 use_fs = true
 
-[answer_target.settings]
-# Базовая папка берётся из tools.env (CODEX_WORKSPACE). Относительный путь — от корня проекта.
+[answer_targets.settings]
+# Если CODEX_WORKSPACE пуст, используется output-флаг или <project>/output.
 workspace_env = "CODEX_WORKSPACE"
 folder_prefix = "task"
 prompt_filename = "PROMPT.md"
 # launch = false   # раскомментируйте, чтобы только подготовить папку, не открывая Codex
+
+# Второй приёмник запускается одновременно и просто открывает свою папку с промптом.
+[[answer_targets]]
+id = "folder"
+use_fs = true
+
+[answer_targets.settings]
+folder_prefix = "task"

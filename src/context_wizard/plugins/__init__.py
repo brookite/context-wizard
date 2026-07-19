@@ -6,11 +6,13 @@ from context_wizard.plugins.base import (
     PluginContext,
 )
 from context_wizard.plugins.discovery import builtin_plugins_dir, discover_plugins
+from context_wizard.plugins.errors import AnswerDeliveryError
 from context_wizard.plugins.registry import PluginRegistry
 from context_wizard.plugins.staging import Stage, StagedTool, StageResult, drive_stages
 
 __all__ = [
     "AnswerTarget",
+    "AnswerDeliveryError",
     "ExternalTool",
     "PluginContext",
     "PluginRegistry",

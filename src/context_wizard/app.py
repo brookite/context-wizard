@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
 from context_wizard.cache import Cache
 from context_wizard.config import (
@@ -15,8 +18,14 @@ from context_wizard.config import (
     load_vars_file,
     prompt_id_of,
 )
-from context_wizard.output import OutputOptions, RichPromptDTO, write_output
+from context_wizard.output import (
+    OutputOptions,
+    RichPromptDTO,
+    resolve_delivery_directory,
+    write_output,
+)
 from context_wizard.plugins import (
+    AnswerDeliveryError,
     PluginContext,
     PluginRegistry,
     builtin_plugins_dir,
@@ -38,8 +47,8 @@ class CollectorOptions:
     prompt_id: str | None = None
     user_prompt: str | None = None
     invalidate: bool = False
-    answer_target_id: str | None = None
-    """Переопределение приёмника ответа по id (плагин должен быть установлен)."""
+    answer_target_ids: list[str] | None = None
+    """Переопределение приёмников ответа по id (плагины должны быть установлены)."""
 
 
 class Collector:
@@ -79,24 +88,28 @@ class Collector:
 
         self._run_survey(prompt_id)
 
-        target = self._effective_target(options)
-        use_fs = target.use_fs if target else True
+        targets = self._effective_targets(options)
+        use_fs = all(target.use_fs for target in targets)
 
         if self._has_missing(template, use_fs):
             self._run_external_tool(use_fs)
 
         dto = self._render_final(template, use_fs)
-        self._deliver(dto, options.output, use_fs, target)
+        self._deliver(dto, options.output, use_fs, targets)
         return dto
 
-    def _effective_target(self, options: CollectorOptions) -> AnswerTargetConfig | None:
-        """Определить приёмник ответа: CLI-переопределение по id либо значение из setup.toml."""
-        if options.answer_target_id is None:
-            return self.config.answer_target
-        configured = self.config.answer_target
-        if configured is not None and configured.id == options.answer_target_id:
+    def _effective_targets(self, options: CollectorOptions) -> list[AnswerTargetConfig]:
+        """Определить приёмники: конфигурация либо полное CLI-переопределение."""
+        configured = self.config.answer_target_configs
+        if options.answer_target_ids is None:
             return configured
-        return AnswerTargetConfig(id=options.answer_target_id)
+        if len(options.answer_target_ids) != len(set(options.answer_target_ids)):
+            raise ValueError("--answer-target не должен содержать повторяющиеся id")
+        by_id = {target.id: target for target in configured}
+        return [
+            by_id.get(plugin_id, AnswerTargetConfig(id=plugin_id))
+            for plugin_id in options.answer_target_ids
+        ]
 
     # -- Шаги конвейера -------------------------------------------------
 
@@ -152,7 +165,15 @@ class Collector:
             env=self._load_tools_env(),
             cache=tool_cache,
         )
-        self.store.update(tool.run(context), Source.EXTERNAL_TOOL)
+        try:
+            values = tool.run(context)
+        except BaseException:
+            # Авторизация и другие дорогие этапы могут уже обновить cache. Сохраняем их,
+            # даже если пользователь отменил следующий выбор или загрузка завершилась ошибкой.
+            with suppress(OSError, TypeError, ValueError):
+                self.cache.save_tool_cache(tool_id, tool_cache)
+            raise
+        self.store.update(values, Source.EXTERNAL_TOOL)
         self.cache.save_tool_cache(tool_id, tool_cache)
 
     def _render_final(self, template: str, use_fs: bool) -> RichPromptDTO:
@@ -179,23 +200,49 @@ class Collector:
         dto: RichPromptDTO,
         output: OutputOptions,
         use_fs: bool,
-        target: AnswerTargetConfig | None,
+        targets: list[AnswerTargetConfig],
     ) -> None:
-        if target is not None:
-            registry = self.registry()
-            if registry.has_answer(target.id):
-                context = PluginContext(
-                    root=self.root,
-                    store=self.store,
-                    ui=self.ui,
-                    use_fs=use_fs,
-                    settings=target.settings,
-                    env=self._load_tools_env(),
-                )
-                registry.create_answer(target.id).deliver(dto, context)
-                return
-            self.ui.notify(f"Приёмник {target.id!r} не установлен — вывод по умолчанию")
-        write_output(dto, output)
+        if not targets:
+            write_output(dto, output)
+            return
+
+        registry = self.registry()
+        installed = [target for target in targets if registry.has_answer(target.id)]
+        for target in targets:
+            if not registry.has_answer(target.id):
+                self.ui.notify(f"Приёмник {target.id!r} не установлен — пропущен")
+        if not installed:
+            write_output(dto, output)
+            return
+
+        delivery = resolve_delivery_directory(output, self.root)
+        env = self._load_tools_env()
+        notification_lock = Lock()
+
+        def deliver(target: AnswerTargetConfig) -> None:
+            context = PluginContext(
+                root=self.root,
+                store=self.store,
+                ui=self.ui,
+                use_fs=use_fs,
+                settings=dict(target.settings),
+                env=dict(env),
+                output_dir=delivery.path,
+                output_dir_ambiguous=delivery.ambiguous,
+                notification_lock=notification_lock,
+            )
+            registry.create_answer(target.id).deliver(dto, context)
+
+        failures: list[tuple[str, BaseException]] = []
+        with ThreadPoolExecutor(max_workers=len(installed)) as executor:
+            futures = [(target.id, executor.submit(deliver, target)) for target in installed]
+            for plugin_id, future in futures:
+                try:
+                    future.result()
+                except BaseException as error:
+                    failures.append((plugin_id, error))
+        if failures:
+            raise AnswerDeliveryError(failures)
 
     def _load_tools_env(self) -> dict[str, str]:
         path = self.root / TOOLS_ENV_FILENAME

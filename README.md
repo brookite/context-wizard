@@ -22,8 +22,8 @@ uv run python -m context_wizard examples/demo --output out
 ### CLI-флаги
 - `<project>` — каталог проекта (по умолчанию текущий).
 - `--prompt <id>` — выбрать промпт без интерактива (id = имя файла без расширения).
-- `--answer-target <id>` — переопределить приёмник ответа по id плагина (должен быть
-  установлен глобально или в проекте); например `--answer-target codex`.
+- `--answer-target <id>` — переопределить приёмники ответа по id плагинов; флаг можно
+  повторять, например `--answer-target codex --answer-target folder`.
 - `--user-prompt <text>` — дописать текстовый фрагмент к промпту.
 - `--invalidate` — очистить кэш `.tmp/` перед запуском.
 - `--prompt-output <dir>` — сохранить промпт как `rich_prompt.txt` (иначе stdout).
@@ -123,13 +123,33 @@ class Moodle(StagedTool):
 Значения этапов сразу попадают в `store` (слой `EXTERNAL_TOOL`), поэтому поздние этапы
 видят ответы ранних.
 
+### Несколько приёмников ответа
+
+Старый одиночный `[answer_target]` по-прежнему поддерживается. Для одновременной доставки
+используйте массив таблиц; плагины запускаются параллельно, а ошибки сообщаются после
+завершения всех приёмников:
+
+```toml
+[[answer_targets]]
+id = "codex"
+use_fs = true
+
+[[answer_targets]]
+id = "folder"
+use_fs = true
+```
+
+Одновременно задавать `answer_target` и `answer_targets` нельзя. Если хотя бы один приёмник
+имеет `use_fs = false`, общий промпт рендерится без доступа к файловой системе.
+
 ### Встроенный плагин: доставка в Codex CLI
 
 `codex` (`src/context_wizard/builtins/codex_target.py`) — встроенный глобальный `AnswerTarget`:
 создаёт рабочую папку для ответа, копирует туда вложения с сохранением относительной
 структуры, кладёт промпт в `PROMPT.md` и открывает Codex CLI в отдельном окне с рабочим
-корнем = этой папке. Базовая папка берётся из переменной `CODEX_WORKSPACE` (в `tools.env`)
-или из `settings.workspace_dir`. Копировать в проект не нужно — включается в `setup.toml`:
+корнем = этой папке. Приоритет базовой папки: `settings.workspace_dir`, переменная
+`CODEX_WORKSPACE` (в `tools.env`), каталог из output-флагов, затем `<project>/output`.
+Копировать в проект не нужно — включается в `setup.toml`:
 
 ```toml
 [answer_target]
@@ -138,6 +158,26 @@ use_fs = true
 [answer_target.settings]
 workspace_env = "CODEX_WORKSPACE"   # либо workspace_dir = "путь"
 # launch = false                    # только подготовить папку, не открывать Codex
+```
+
+Если одновременно заданы разные `--prompt-output` и `--file-output`, используется их ближайший
+общий родитель при условии, что он находится не выше двух уровней от каждого каталога. Если
+такого родителя нет и `CODEX_WORKSPACE` не задан, Codex попросит явно задать эту переменную.
+
+### Встроенный плагин: открыть папку с промптом
+
+`folder` подготавливает отдельную папку с `PROMPT.md` и вложениями, затем открывает её в
+Explorer, Finder или файловом менеджере Linux. Без output-флагов используется
+`<project>/output`; `--output`, `--prompt-output` и `--file-output` разрешаются по тем же правилам
+общего родителя. Для неоднозначных раздельных путей задайте каталог явно:
+
+```toml
+[[answer_targets]]
+id = "folder"
+use_fs = true
+
+[answer_targets.settings]
+workspace_dir = "prepared-prompts"
 ```
 
 Готовый пример — `examples/codex/`:

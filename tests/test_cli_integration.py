@@ -80,13 +80,24 @@ async def test_full_app_through_tui(tmp_path):
 
 def test_parser_reads_flags():
     args = build_parser().parse_args(
-        ["proj", "--prompt", "task", "--invalidate", "--output", "o", "--answer-target", "codex"]
+        [
+            "proj",
+            "--prompt",
+            "task",
+            "--invalidate",
+            "--output",
+            "o",
+            "--answer-target",
+            "codex",
+            "--answer-target",
+            "folder",
+        ]
     )
     assert args.project == "proj"
     assert args.prompt == "task"
     assert args.invalidate is True
     assert args.output == "o"
-    assert args.answer_target == "codex"
+    assert args.answer_target == ["codex", "folder"]
 
 
 def test_conflicting_output_flags_error(tmp_path):

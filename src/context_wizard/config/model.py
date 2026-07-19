@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AnswerTargetConfig(BaseModel):
@@ -29,6 +29,8 @@ class SetupConfig(BaseModel):
     """Идентификатор рекомендованного внешнего инструмента сбора контекста."""
     answer_target: AnswerTargetConfig | None = None
     """Инструмент передачи ответа. Если не задан — вывод в stdout/файл."""
+    answer_targets: list[AnswerTargetConfig] | None = None
+    """Упорядоченный список инструментов передачи ответа."""
     vars_storage: str | None = None
     """Путь (внутри проекта) к файлу глобальных переменных (.json или .env)."""
     plugins_dir: str | list[str] = "plugins"
@@ -46,9 +48,30 @@ class SetupConfig(BaseModel):
             raise ValueError("пути в plugins_dir должны быть непустыми строками")
         return value
 
+    @model_validator(mode="after")
+    def _validate_answer_targets(self) -> SetupConfig:
+        if self.answer_target is not None and self.answer_targets is not None:
+            raise ValueError("answer_target и answer_targets нельзя задавать одновременно")
+        targets = self.answer_target_configs
+        if self.answer_targets is not None and not targets:
+            raise ValueError("answer_targets не может быть пустым списком")
+        ids = [target.id for target in targets]
+        if len(ids) != len(set(ids)):
+            raise ValueError("id в answer_targets не должны повторяться")
+        return self
+
     @property
     def plugin_dirs(self) -> list[str]:
         """Каталоги плагинов в едином списковом представлении и заданном порядке."""
         if isinstance(self.plugins_dir, str):
             return [self.plugins_dir]
         return list(self.plugins_dir)
+
+    @property
+    def answer_target_configs(self) -> list[AnswerTargetConfig]:
+        """Приёмники ответа в едином списковом представлении и заданном порядке."""
+        if self.answer_targets is not None:
+            return list(self.answer_targets)
+        if self.answer_target is not None:
+            return [self.answer_target]
+        return []

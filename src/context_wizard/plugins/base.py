@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 
 from context_wizard.output.dto import RichPromptDTO
 from context_wizard.state import VariableStore
@@ -49,6 +50,9 @@ class PluginContext:
     env: dict[str, str] = field(default_factory=dict)
     scratch: dict[str, object] = field(default_factory=dict)
     cache: MutableMapping[str, object] = field(default_factory=dict)
+    output_dir: Path | None = None
+    output_dir_ambiguous: bool = False
+    notification_lock: Lock | None = None
 
     # -- Высокий уровень: абстракции над опросом ------------------------
 
@@ -131,7 +135,11 @@ class PluginContext:
     def notify(self, message: str) -> None:
         """Показать сообщение пользователю (если UI доступен)."""
         if self.ui is not None:
-            self.ui.notify(message)
+            if self.notification_lock is None:
+                self.ui.notify(message)
+            else:
+                with self.notification_lock:
+                    self.ui.notify(message)
 
     # -- Низкий уровень: прямой TUI ------------------------------------
 

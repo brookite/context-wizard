@@ -1,8 +1,8 @@
 """Встроенный AnswerTarget: доставка готового промпта в OpenAI Codex CLI (``id = "codex"``).
 
 Что делает при доставке:
-1. берёт базовую папку из переменной окружения (по умолчанию ``CODEX_WORKSPACE``,
-   задаётся в ``tools.env``) или из ``settings.workspace_dir``;
+1. берёт базовую папку из ``settings.workspace_dir``, переменной окружения (по умолчанию
+   ``CODEX_WORKSPACE``), output-флагов или ``<project>/output``;
 2. создаёт в ней уникальную подпапку для этого ответа;
 3. копирует все вложения (``dto.attachments``) с сохранением относительной структуры,
    чтобы относительные пути из промпта разрешались внутри рабочей папки;
@@ -28,9 +28,9 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
+from context_wizard.builtins._workspace import prepare_workspace, resolve_path
 from context_wizard.output import RichPromptDTO
 from context_wizard.plugins import AnswerTarget, PluginContext
 
@@ -56,51 +56,23 @@ class CodexAnswerTarget(AnswerTarget):
     # -- Подготовка рабочей папки (без побочных эффектов запуска) --------
 
     def prepare_workspace(self, dto: RichPromptDTO, context: PluginContext) -> Path:
-        base = self._base_dir(context)
-        base.mkdir(parents=True, exist_ok=True)
-
-        prefix = str(context.settings.get("folder_prefix", "answer"))
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        workspace = _unique_dir(base / f"{prefix}_{stamp}")
-        workspace.mkdir(parents=True)
-
-        self._copy_attachments(dto, workspace)
-
-        prompt_name = str(context.settings.get("prompt_filename", "PROMPT.md"))
-        (workspace / prompt_name).write_text(dto.prompt, encoding="utf-8")
-        return workspace
+        return prepare_workspace(dto, context, self._base_dir(context))
 
     def _base_dir(self, context: PluginContext) -> Path:
         literal = context.settings.get("workspace_dir")
         if literal:
-            return _resolve(str(literal), context.root)
+            return resolve_path(literal, context.root)
 
         var = str(context.settings.get("workspace_env", "CODEX_WORKSPACE"))
         value = context.env.get(var) or os.environ.get(var)
-        if not value:
+        if value:
+            return resolve_path(value, context.root)
+        if context.output_dir_ambiguous:
             raise RuntimeError(
-                f"Не задана папка для Codex: переменная {var!r} пуста (укажите её в tools.env) "
-                "или задайте settings.workspace_dir"
+                "Не удалось определить общую папку вывода для Codex. "
+                f"Установите {var} в tools.env или задайте settings.workspace_dir"
             )
-        return _resolve(value, context.root)
-
-    def _copy_attachments(self, dto: RichPromptDTO, workspace: Path) -> None:
-        for src in dto.attachments:
-            dest = self._dest_for(src, dto.root, workspace)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if src.is_dir():
-                shutil.copytree(src, dest, dirs_exist_ok=True)
-            elif src.exists():
-                shutil.copy2(src, dest)
-
-    @staticmethod
-    def _dest_for(src: Path, root: Path, workspace: Path) -> Path:
-        """Сохранить относительную структуру; внешние пути — в подпапку ``_external``."""
-        try:
-            rel = src.resolve().relative_to(Path(root).resolve())
-        except ValueError:
-            return workspace / "_external" / src.name
-        return workspace / rel
+        return context.output_dir or context.root / "output"
 
     # -- Запуск Codex (побочный эффект) ---------------------------------
 
@@ -130,21 +102,6 @@ class CodexAnswerTarget(AnswerTarget):
 
         # Прочие ОС — best effort в текущем терминале.
         return [codex, "--cd", str(workspace), bootstrap], 0
-
-
-def _resolve(value: str, root: Path) -> Path:
-    path = Path(value).expanduser()
-    return path if path.is_absolute() else (Path(root) / path)
-
-
-def _unique_dir(path: Path) -> Path:
-    if not path.exists():
-        return path
-    for index in range(1, 1000):
-        candidate = path.with_name(f"{path.name}-{index}")
-        if not candidate.exists():
-            return candidate
-    raise RuntimeError(f"Не удалось подобрать уникальную папку рядом с {path}")
 
 
 def _ps_launcher(codex: str, workspace: Path, bootstrap: str) -> str:

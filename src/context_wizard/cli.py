@@ -26,9 +26,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt", default=None, help="идентификатор промпта (без интерактива)")
     parser.add_argument(
         "--answer-target",
+        action="append",
         default=None,
         metavar="ID",
-        help="переопределить приёмник ответа по id плагина (глобального или проектного)",
+        help="переопределить приёмники ответа; флаг можно повторять",
     )
     parser.add_argument(
         "--user-prompt",
@@ -74,7 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         prompt_id=args.prompt,
         user_prompt=args.user_prompt,
         invalidate=args.invalidate,
-        answer_target_id=args.answer_target,
+        answer_target_ids=args.answer_target,
     )
 
     app = WizardApp()
